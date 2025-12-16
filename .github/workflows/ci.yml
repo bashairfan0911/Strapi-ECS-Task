@@ -62,7 +62,13 @@ jobs:
 
       - name: Set output image tag
         id: ci-output
-        run: echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          IMAGE_URI="$ECR_REGISTRY/irfan-strapi-image:$IMAGE_TAG"
+          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
 
       - name: Create deployment summary
         run: |

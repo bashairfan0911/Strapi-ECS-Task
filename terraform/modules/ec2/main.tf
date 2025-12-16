@@ -17,6 +17,7 @@ resource "aws_instance" "strapi_ec2" {
 
   user_data = templatefile("${path.module}/user_data.sh", {
     docker_image  = var.docker_image
+    docker_tag    = var.docker_image_tag
     aws_region    = var.aws_region
     ecr_registry  = var.ecr_registry
     db_host       = var.db_host

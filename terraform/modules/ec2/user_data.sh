@@ -19,7 +19,7 @@ aws ecr get-login-password --region ${aws_region} \
   | docker login --username AWS --password-stdin ${ecr_registry}
 
 # Pull Docker image
-docker pull ${docker_image}
+docker pull ${docker_image}:${docker_tag}
 
 # Remove existing container if running
 docker rm -f strapi || true
@@ -32,6 +32,6 @@ docker run -d --name strapi -p 1337:1337 \
   -e DATABASE_NAME="${db_name}" \
   -e DATABASE_USERNAME="${db_username}" \
   -e DATABASE_PASSWORD="${db_password}" \
-  ${docker_image}
+  ${docker_image}:${docker_tag}
 
 echo "Strapi container started successfully"

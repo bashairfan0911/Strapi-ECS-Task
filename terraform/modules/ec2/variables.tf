@@ -24,6 +24,12 @@ variable "docker_image" {
   description = "Docker image URI from ECR"
 }
 
+variable "docker_image_tag" {
+  type        = string
+  default     = "latest"
+  description = "Docker image tag (commit SHA or 'latest')"
+}
+
 variable "aws_region" {
   type        = string
   description = "AWS region"
