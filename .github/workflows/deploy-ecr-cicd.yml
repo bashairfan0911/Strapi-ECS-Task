@@ -1,0 +1,77 @@
+name: Deploy - ECR-CICD Branch
+
+on:
+  workflow_run:
+    workflows: ["CI - Build & Push Strapi Image to ECR"]
+    types:
+      - completed
+    branches:
+      - ECR-cicd
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  notify_ci_completion:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Get latest ECR image
+        id: ecr-image
+        run: |
+          IMAGE_INFO=$(aws ecr describe-images \
+            --repository-name irfan-strapi-image \
+            --region eu-north-1 \
+            --query 'imageDetails[0].[imageTags[0],imageSizeInBytes,imagePushedAt]' \
+            --output text)
+          
+          echo "image_info=$IMAGE_INFO" >> $GITHUB_OUTPUT
+
+      - name: Create deployment summary
+        run: |
+          echo "## ✅ ECR-CICD Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ECR-cicd" >> $GITHUB_STEP_SUMMARY
+          echo "**Workflow:** CI - Build & Push Strapi Image to ECR" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Image Details:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Repository:** irfan-strapi-image" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tags:** latest, ecr-cicd" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry:** 301782007642.dkr.ecr.eu-north-1.amazonaws.com" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🚀 Next Steps:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Review image in [ECR Console](https://console.aws.amazon.com/ecr/repositories)" >> $GITHUB_STEP_SUMMARY
+          echo "2. Update ECS task definition with new image tag" >> $GITHUB_STEP_SUMMARY
+          echo "3. Deploy to production/staging" >> $GITHUB_STEP_SUMMARY
+
+  list_ecr_images:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: List images in ECR
+        run: |
+          echo "### 📋 Available ECR Images" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          aws ecr describe-images \
+            --repository-name irfan-strapi-image \
+            --region eu-north-1 \
+            --query 'imageDetails[*].[imageTags[0],imageSizeInBytes,imagePushedAt]' \
+            --output table | tee -a $GITHUB_STEP_SUMMARY
