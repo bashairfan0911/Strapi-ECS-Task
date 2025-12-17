@@ -4,21 +4,37 @@ on:
   push:
     paths:
       - "src/**"
+      - "config/**"
       - "Dockerfile"
+      - "package.json"
       - ".github/workflows/ci.yml"
+    branches: [ main ]
+  pull_request:
+    paths:
+      - "src/**"
+      - "config/**"
+      - "Dockerfile"
+      - "package.json"
     branches: [ main ]
 
 permissions:
   contents: read
   id-token: write
+  checks: write
+  pull-requests: write
 
 jobs:
   build_and_push:
     runs-on: ubuntu-latest
+    outputs:
+      image-uri: ${{ steps.image-uri.outputs.uri }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -37,16 +53,45 @@ jobs:
           ECR_REPOSITORY: "irfan-strapi-image"
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          echo "Building Docker image..."
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-                     $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "Building Docker image with tag: $IMAGE_TAG"
+          docker build \
+            --build-arg NODE_ENV=production \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            .
 
           echo "Pushing to ECR..."
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          
+          echo "Build completed successfully!"
 
-      - name: Set output image tag
-        id: ci-output
-        run: echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+      - name: Set output image URI
+        id: image-uri
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          ECR_REPOSITORY: "irfan-strapi-image"
+        run: |
+          echo "uri=$ECR_REGISTRY/$ECR_REPOSITORY:latest" >> $GITHUB_OUTPUT
+
+      - name: Log build success
+        run: |
+          echo "✅ Docker image built and pushed successfully!"
+          echo "📦 Image URI: ${{ steps.image-uri.outputs.uri }}"
+
+  notify:
+    needs: build_and_push
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Build notification
+        run: |
+          if [ "${{ needs.build_and_push.result }}" = "success" ]; then
+            echo "✅ CI Pipeline completed successfully!"
+            echo "Image pushed: ${{ needs.build_and_push.outputs.image-uri }}"
+          else
+            echo "❌ CI Pipeline failed!"
+            exit 1
+          fi
 

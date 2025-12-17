@@ -1,12 +1,10 @@
 name: CD - Deploy to ECS using Terraform
 
 on:
-
   workflow_run:
     workflows: ["CI - Build & Push Strapi Image to ECR"]
     types:
       - completed
-
 
   push:
     branches:
@@ -15,17 +13,28 @@ on:
       - "terraform/**"
       - ".github/workflows/cd.yml"
 
- 
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
   ECR_REPOSITORY: irfan-strapi-image
+  CLUSTER_NAME: strapi-ecs-irfan-cluster
+  SERVICE_NAME: strapi-service
 
 permissions:
   id-token: write
   contents: read
+  deployments: write
 
 jobs:
   deploy:
@@ -37,9 +46,12 @@ jobs:
       github.event.workflow_run.conclusion == 'success'
 
     runs-on: ubuntu-latest
+    environment: 
+      name: production
+      url: http://3.7.252.173:1337
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Configure AWS credentials
@@ -49,27 +61,165 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Set IMAGE_URI for ECS
+      - name: Determine image tag
+        id: image-tag
         run: |
           if [ "${{ github.event_name }}" = "workflow_run" ]; then
             IMAGE_TAG="${{ github.event.workflow_run.head_sha }}"
           else
             IMAGE_TAG="${{ github.sha }}"
           fi
+          
+          IMAGE_URI="${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest"
+          
+          echo "image_uri=${IMAGE_URI}" >> $GITHUB_OUTPUT
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
 
-          echo "IMAGE_URI=301782007642.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:latest" >> $GITHUB_ENV
+      - name: Verify Docker image in ECR
+        run: |
+          aws ecr describe-images \
+            --repository-name ${{ env.ECR_REPOSITORY }} \
+            --region ${{ env.AWS_REGION }} \
+            || { echo "❌ ECR repository not found!"; exit 1; }
+          
+          echo "✅ Image verified in ECR"
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v2
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.12.2
 
-      - name: Terraform Init
+      - name: Terraform Format Check
+        working-directory: ./terraform
+        run: terraform fmt -check -recursive || true
+
+      - name: Terraform Validate
+        working-directory: ./terraform
+        run: terraform validate
+
+      - name: Terraform Initialize
         working-directory: ./terraform
         run: terraform init
 
       - name: Terraform Plan
         working-directory: ./terraform
-        run: terraform plan -var="image_uri=${IMAGE_URI}"
+        run: |
+          terraform plan \
+            -var="image_uri=${{ steps.image-tag.outputs.image_uri }}" \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -out=tfplan
+
+      - name: Save Terraform Plan
+        if: always()
+        run: |
+          cd terraform
+          terraform show -json tfplan > tfplan.json
 
       - name: Terraform Apply
         working-directory: ./terraform
-        run: terraform apply -auto-approve -var="image_uri=${IMAGE_URI}"
+        run: |
+          terraform apply \
+            -auto-approve \
+            -var="image_uri=${{ steps.image-tag.outputs.image_uri }}" \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            tfplan
+
+      - name: Get deployment outputs
+        id: terraform-outputs
+        working-directory: ./terraform
+        run: |
+          echo "log_group=$(terraform output -raw cloudwatch_log_group_name)" >> $GITHUB_OUTPUT
+          echo "dashboard_url=$(terraform output -raw cloudwatch_dashboard_url)" >> $GITHUB_OUTPUT
+          echo "rds_endpoint=$(terraform output -raw rds_endpoint)" >> $GITHUB_OUTPUT
+
+      - name: Wait for ECS service to stabilize
+        run: |
+          echo "⏳ Waiting for ECS service to stabilize..."
+          aws ecs wait services-stable \
+            --cluster ${{ env.CLUSTER_NAME }} \
+            --services ${{ env.SERVICE_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            || { echo "⚠️ Service did not stabilize within timeout"; }
+          
+          echo "✅ ECS service update initiated"
+
+      - name: Verify service health
+        run: |
+          SERVICE_INFO=$(aws ecs describe-services \
+            --cluster ${{ env.CLUSTER_NAME }} \
+            --services ${{ env.SERVICE_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'services[0].[runningCount,desiredCount,deployments[0].status]' \
+            --output text)
+          
+          echo "Service Status: $SERVICE_INFO"
+          RUNNING=$(echo $SERVICE_INFO | awk '{print $1}')
+          DESIRED=$(echo $SERVICE_INFO | awk '{print $2}')
+          
+          if [ "$RUNNING" -ge "$DESIRED" ]; then
+            echo "✅ Service health check passed!"
+          else
+            echo "⚠️ Service still stabilizing: $RUNNING/$DESIRED tasks running"
+          fi
+
+      - name: Get application URL
+        id: app-url
+        run: |
+          TASK_ARN=$(aws ecs list-tasks \
+            --cluster ${{ env.CLUSTER_NAME }} \
+            --service-name ${{ env.SERVICE_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'taskArns[0]' \
+            --output text)
+          
+          if [ ! -z "$TASK_ARN" ]; then
+            ENI=$(aws ecs describe-tasks \
+              --cluster ${{ env.CLUSTER_NAME }} \
+              --tasks $TASK_ARN \
+              --region ${{ env.AWS_REGION }} \
+              --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value[0]' \
+              --output text)
+            
+            PUBLIC_IP=$(aws ec2 describe-network-interfaces \
+              --network-interface-ids $ENI \
+              --region ${{ env.AWS_REGION }} \
+              --query 'NetworkInterfaces[0].Association.PublicIp' \
+              --output text)
+            
+            echo "application_url=http://$PUBLIC_IP:1337" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post deployment summary
+        if: always()
+        run: |
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployment Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
+          echo "**Image Tag:** ${{ steps.image-tag.outputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image URI:** ${{ steps.image-tag.outputs.image_uri }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Cluster:** ${{ env.CLUSTER_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:** ${{ env.SERVICE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### CloudWatch Monitoring" >> $GITHUB_STEP_SUMMARY
+          echo "- **Log Group:** ${{ steps.terraform-outputs.outputs.log_group }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dashboard:** [View Dashboard](${{ steps.terraform-outputs.outputs.dashboard_url }})" >> $GITHUB_STEP_SUMMARY
+          echo "- **RDS Endpoint:** ${{ steps.terraform-outputs.outputs.rds_endpoint }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ ! -z "${{ steps.app-url.outputs.application_url }}" ]; then
+            echo "### Application Access" >> $GITHUB_STEP_SUMMARY
+            echo "- **URL:** [${{ steps.app-url.outputs.application_url }}](${{ steps.app-url.outputs.application_url }})" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Deployment notification
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "✅ Deployment completed successfully!"
+            echo "✅ ECS service updated with new Docker image"
+            echo "✅ CloudWatch monitoring enabled"
+            echo "✅ Access application at: http://3.7.252.173:1337"
+          else
+            echo "❌ Deployment failed!"
+            exit 1
+          fi

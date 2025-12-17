@@ -21,3 +21,9 @@ variable "db_username" {
 variable "db_password" {
   type      = string
 }
+
+variable "log_retention_days" {
+  type        = number
+  default     = 7
+  description = "CloudWatch log retention in days"
+}

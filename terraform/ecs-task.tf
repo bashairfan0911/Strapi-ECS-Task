@@ -21,6 +21,15 @@ resource "aws_ecs_task_definition" "this" {
         }
       ]
 
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.strapi_ecs.name
+          awslogs-region        = var.aws_region
+          awslogs-stream-prefix = "ecs/strapi"
+        }
+      }
+
       environment = [
         { name = "DATABASE_CLIENT", value = "postgres" },
         { name = "DATABASE_HOST", value = aws_db_instance.strapi_db.address },
