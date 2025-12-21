@@ -43,7 +43,7 @@ resource "aws_cloudwatch_metric_alarm" "ecs_cpu_high" {
 
   dimensions = {
     ClusterName = aws_ecs_cluster.this.name
-    ServiceName = aws_ecs_service.this.name
+    ServiceName = aws_ecs_service.strapi.name
   }
 
   tags = {
@@ -66,7 +66,7 @@ resource "aws_cloudwatch_metric_alarm" "ecs_memory_high" {
 
   dimensions = {
     ClusterName = aws_ecs_cluster.this.name
-    ServiceName = aws_ecs_service.this.name
+    ServiceName = aws_ecs_service.strapi.name
   }
 
   tags = {
@@ -89,7 +89,7 @@ resource "aws_cloudwatch_metric_alarm" "ecs_running_count_low" {
 
   dimensions = {
     ClusterName = aws_ecs_cluster.this.name
-    ServiceName = aws_ecs_service.this.name
+    ServiceName = aws_ecs_service.strapi.name
   }
 
   tags = {
@@ -148,12 +148,15 @@ resource "aws_cloudwatch_dashboard" "strapi_main" {
   dashboard_body = jsonencode({
     widgets = [
       {
-        type = "metric"
+        type   = "metric"
+        x      = 0
+        y      = 0
+        width  = 6
+        height = 6
         properties = {
           metrics = [
-            ["AWS/ECS", "CPUUtilization", { stat = "Average", label = "ECS CPU %" }],
-            [".", "MemoryUtilization", { stat = "Average", label = "ECS Memory %" }],
-            [".", "RunningCount", { stat = "Average", label = "Running Tasks" }]
+            ["AWS/ECS", "CPUUtilization", "ClusterName", "${aws_ecs_cluster.this.name}", "ServiceName", "${aws_ecs_service.strapi.name}", { label = "ECS CPU %" }],
+            ["AWS/ECS", "MemoryUtilization", "ClusterName", "${aws_ecs_cluster.this.name}", "ServiceName", "${aws_ecs_service.strapi.name}", { label = "ECS Memory %" }]
           ]
           period = 300
           stat   = "Average"
@@ -165,19 +168,19 @@ resource "aws_cloudwatch_dashboard" "strapi_main" {
               max = 100
             }
           }
-          dimensions = {
-            ClusterName = aws_ecs_cluster.this.name
-            ServiceName = aws_ecs_service.this.name
-          }
         }
       },
       {
-        type = "metric"
+        type   = "metric"
+        x      = 6
+        y      = 0
+        width  = 6
+        height = 6
         properties = {
           metrics = [
-            ["AWS/RDS", "CPUUtilization", { stat = "Average", label = "RDS CPU %" }],
-            [".", "DatabaseConnections", { stat = "Average", label = "DB Connections" }],
-            [".", "DiskQueueDepth", { stat = "Average", label = "Disk Queue Depth" }]
+            ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", "${aws_db_instance.strapi_db.identifier}", { label = "RDS CPU %" }],
+            ["AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", "${aws_db_instance.strapi_db.identifier}", { label = "DB Connections" }],
+            ["AWS/RDS", "DiskQueueDepth", "DBInstanceIdentifier", "${aws_db_instance.strapi_db.identifier}", { label = "Disk Queue Depth" }]
           ]
           period = 300
           stat   = "Average"
@@ -188,39 +191,50 @@ resource "aws_cloudwatch_dashboard" "strapi_main" {
               min = 0
             }
           }
-          dimensions = {
-            DBInstanceIdentifier = aws_db_instance.strapi_db.id
-          }
         }
       },
       {
-        type = "metric"
+        type   = "metric"
+        x      = 12
+        y      = 0
+        width  = 6
+        height = 6
         properties = {
           metrics = [
-            ["AWS/ECS", "NetworkIn", { stat = "Sum", label = "Network In (bytes)" }],
-            [".", "NetworkOut", { stat = "Sum", label = "Network Out (bytes)" }]
+            ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", "app/strapi-alb-irfan/73119cfcfd58d4c7", { label = "Request Count", stat = "Sum" }],
+            ["AWS/ApplicationELB", "HTTPCode_Target_2XX_Count", "LoadBalancer", "app/strapi-alb-irfan/73119cfcfd58d4c7", { label = "2XX Responses", stat = "Sum" }]
           ]
           period = 300
           stat   = "Sum"
           region = var.aws_region
-          title  = "Network Traffic"
+          title  = "ALB Traffic"
           yAxis = {
             left = {
               min = 0
             }
           }
-          dimensions = {
-            ClusterName = aws_ecs_cluster.this.name
-            ServiceName = aws_ecs_service.this.name
-          }
         }
       },
       {
-        type = "log"
+        type   = "metric"
+        x      = 18
+        y      = 0
+        width  = 6
+        height = 6
         properties = {
-          query   = "fields @timestamp, @message | filter @message like /ERROR/ | stats count() as error_count by bin(5m)"
-          region  = var.aws_region
-          title   = "Error Log Count (Last 1 Hour)"
+          metrics = [
+            ["ECS/ContainerInsights", "DesiredTaskCount", "ClusterName", "${aws_ecs_cluster.this.name}", "ServiceName", "${aws_ecs_service.strapi.name}", { label = "Desired Tasks" }],
+            ["ECS/ContainerInsights", "RunningTaskCount", "ClusterName", "${aws_ecs_cluster.this.name}", "ServiceName", "${aws_ecs_service.strapi.name}", { label = "Running Tasks" }]
+          ]
+          period = 300
+          stat   = "Average"
+          region = var.aws_region
+          title  = "Task Deployment Status"
+          yAxis = {
+            left = {
+              min = 0
+            }
+          }
         }
       }
     ]
@@ -234,15 +248,18 @@ resource "aws_cloudwatch_dashboard" "strapi_performance" {
   dashboard_body = jsonencode({
     widgets = [
       {
-        type = "metric"
+        type   = "metric"
+        x      = 0
+        y      = 0
+        width  = 12
+        height = 6
         properties = {
           metrics = [
-            ["AWS/ECS", "CPUUtilization", { stat = "Maximum", label = "Peak CPU" }],
-            ["...", { stat = "Minimum", label = "Min CPU" }],
-            ["...", { stat = "Average", label = "Avg CPU" }]
+            ["AWS/ECS", "CPUUtilization", "ClusterName", "${aws_ecs_cluster.this.name}", "ServiceName", "${aws_ecs_service.strapi.name}", { stat = "Maximum", label = "Peak CPU" }],
+            ["AWS/ECS", "CPUUtilization", "ClusterName", "${aws_ecs_cluster.this.name}", "ServiceName", "${aws_ecs_service.strapi.name}", { stat = "Minimum", label = "Min CPU" }],
+            ["AWS/ECS", "CPUUtilization", "ClusterName", "${aws_ecs_cluster.this.name}", "ServiceName", "${aws_ecs_service.strapi.name}", { stat = "Average", label = "Avg CPU" }]
           ]
           period = 60
-          stat   = "Average"
           region = var.aws_region
           title  = "CPU Utilization Trends"
           yAxis = {
@@ -251,22 +268,21 @@ resource "aws_cloudwatch_dashboard" "strapi_performance" {
               max = 100
             }
           }
-          dimensions = {
-            ClusterName = aws_ecs_cluster.this.name
-            ServiceName = aws_ecs_service.this.name
-          }
         }
       },
       {
-        type = "metric"
+        type   = "metric"
+        x      = 12
+        y      = 0
+        width  = 12
+        height = 6
         properties = {
           metrics = [
-            ["AWS/ECS", "MemoryUtilization", { stat = "Maximum", label = "Peak Memory" }],
-            ["...", { stat = "Minimum", label = "Min Memory" }],
-            ["...", { stat = "Average", label = "Avg Memory" }]
+            ["AWS/ECS", "MemoryUtilization", "ClusterName", "${aws_ecs_cluster.this.name}", "ServiceName", "${aws_ecs_service.strapi.name}", { stat = "Maximum", label = "Peak Memory" }],
+            ["AWS/ECS", "MemoryUtilization", "ClusterName", "${aws_ecs_cluster.this.name}", "ServiceName", "${aws_ecs_service.strapi.name}", { stat = "Minimum", label = "Min Memory" }],
+            ["AWS/ECS", "MemoryUtilization", "ClusterName", "${aws_ecs_cluster.this.name}", "ServiceName", "${aws_ecs_service.strapi.name}", { stat = "Average", label = "Avg Memory" }]
           ]
           period = 60
-          stat   = "Average"
           region = var.aws_region
           title  = "Memory Utilization Trends"
           yAxis = {
@@ -275,35 +291,45 @@ resource "aws_cloudwatch_dashboard" "strapi_performance" {
               max = 100
             }
           }
-          dimensions = {
-            ClusterName = aws_ecs_cluster.this.name
-            ServiceName = aws_ecs_service.this.name
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 6
+        width  = 12
+        height = 6
+        properties = {
+          metrics = [
+            ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", "app/strapi-alb-irfan/73119cfcfd58d4c7", { stat = "Average", label = "Avg Response Time" }],
+            ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", "app/strapi-alb-irfan/73119cfcfd58d4c7", { stat = "p99", label = "P99 Response Time" }]
+          ]
+          period = 300
+          region = var.aws_region
+          title  = "Application Response Times"
+          yAxis = {
+            left = {
+              min = 0
+            }
           }
         }
       },
       {
-        type = "log"
-        properties = {
-          query   = "fields @duration | stats count() as request_count, avg(@duration) as avg_response_time, max(@duration) as max_response_time by bin(5m)"
-          region  = var.aws_region
-          title   = "Application Response Times"
-        }
-      },
-      {
-        type = "metric"
+        type   = "metric"
+        x      = 12
+        y      = 6
+        width  = 12
+        height = 6
         properties = {
           metrics = [
-            ["AWS/RDS", "DatabaseConnections"],
-            [".", "NetworkReceiveThroughput"],
-            [".", "NetworkTransmitThroughput"]
+            ["AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", "${aws_db_instance.strapi_db.identifier}", { label = "Connections" }],
+            ["AWS/RDS", "NetworkReceiveThroughput", "DBInstanceIdentifier", "${aws_db_instance.strapi_db.identifier}", { label = "Network In" }],
+            ["AWS/RDS", "NetworkTransmitThroughput", "DBInstanceIdentifier", "${aws_db_instance.strapi_db.identifier}", { label = "Network Out" }]
           ]
           period = 300
           stat   = "Average"
           region = var.aws_region
           title  = "RDS Network Throughput"
-          dimensions = {
-            DBInstanceIdentifier = aws_db_instance.strapi_db.id
-          }
         }
       }
     ]

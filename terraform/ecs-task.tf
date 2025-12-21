@@ -31,6 +31,7 @@ resource "aws_ecs_task_definition" "this" {
       }
 
       environment = [
+        { name = "NODE_ENV", value = "development" },
         { name = "DATABASE_CLIENT", value = "postgres" },
         { name = "DATABASE_HOST", value = aws_db_instance.strapi_db.address },
         { name = "DATABASE_PORT", value = "5432" },
@@ -44,7 +45,9 @@ resource "aws_ecs_task_definition" "this" {
         # Admin API / transfer / encryption secrets (change to strong, unique values)
         { name = "API_TOKEN_SALT", value = "change-me-api-salt-123" },
         { name = "TRANSFER_TOKEN_SALT", value = "change-me-transfer-salt-456" },
-        { name = "ENCRYPTION_KEY", value = "change-me-encryption-key-789" }
+        { name = "ENCRYPTION_KEY", value = "change-me-encryption-key-789" },
+        # Enable Content Type Builder in production (set to false to disable)
+        { name = "STRAPI_DISABLE_ADMIN", value = "false" }
       ]
     }
   ])
