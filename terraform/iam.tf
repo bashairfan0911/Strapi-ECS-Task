@@ -1,4 +1,11 @@
-# ECS Execution Role (REQUIRED)
+# =============================================================================
+# IAM Roles for ECS Blue/Green Deployment
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# ECS Task Execution Role
+# Used by ECS to pull images and write logs
+# -----------------------------------------------------------------------------
 resource "aws_iam_role" "ecs_execution" {
   name = "ecsTaskExecutionRole-strapi-irfan"
 
@@ -12,6 +19,11 @@ resource "aws_iam_role" "ecs_execution" {
       Action = "sts:AssumeRole"
     }]
   })
+
+  tags = {
+    Name        = "ecs-execution-role"
+    Environment = "production"
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "ecs_execution_policy" {
@@ -19,7 +31,7 @@ resource "aws_iam_role_policy_attachment" "ecs_execution_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# CloudWatch Logs permissions for ECS execution role
+# CloudWatch Logs and ECR permissions for ECS execution role
 resource "aws_iam_role_policy" "ecs_execution_cloudwatch_logs" {
   name = "ecs-execution-cloudwatch-logs-policy"
   role = aws_iam_role.ecs_execution.id
@@ -39,7 +51,10 @@ resource "aws_iam_role_policy" "ecs_execution_cloudwatch_logs" {
       {
         Effect = "Allow"
         Action = [
-          "ecr:GetAuthorizationToken"
+          "ecr:GetAuthorizationToken",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage"
         ]
         Resource = "*"
       }
@@ -47,6 +62,10 @@ resource "aws_iam_role_policy" "ecs_execution_cloudwatch_logs" {
   })
 }
 
+# -----------------------------------------------------------------------------
+# ECS Task Role
+# Used by containers to access AWS services
+# -----------------------------------------------------------------------------
 resource "aws_iam_role" "ecs_task" {
   name = "ecsTaskRole-strapi-irfan"
 
@@ -59,5 +78,39 @@ resource "aws_iam_role" "ecs_task" {
       }
       Action = "sts:AssumeRole"
     }]
+  })
+
+  tags = {
+    Name        = "ecs-task-role"
+    Environment = "production"
+  }
+}
+
+# Task role policy for application-level permissions
+resource "aws_iam_role_policy" "ecs_task_policy" {
+  name = "ecs-task-policy"
+  role = aws_iam_role.ecs_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:*:*:*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:ListBucket"
+        ]
+        Resource = "*"
+      }
+    ]
   })
 }

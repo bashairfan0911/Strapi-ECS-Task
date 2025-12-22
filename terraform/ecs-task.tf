@@ -1,5 +1,11 @@
+# =============================================================================
+# ECS Task Definition for Blue/Green Deployment
+# =============================================================================
+# This task definition serves as a placeholder and will be updated dynamically
+# by CodeDeploy during Blue/Green deployments via CI/CD pipeline
+
 resource "aws_ecs_task_definition" "this" {
-  family                   = "strapi-task"     // Task definition name
+  family                   = "strapi-task"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = 512
@@ -10,13 +16,14 @@ resource "aws_ecs_task_definition" "this" {
 
   container_definitions = jsonencode([
     {
-      name  = "strapi"
-      image = var.image_uri
+      name      = "strapi"
+      image     = var.image_uri
       essential = true
 
       portMappings = [
         {
           containerPort = 1337
+          hostPort      = 1337
           protocol      = "tcp"
         }
       ]
@@ -31,24 +38,43 @@ resource "aws_ecs_task_definition" "this" {
       }
 
       environment = [
-        { name = "NODE_ENV", value = "development" },
+        { name = "NODE_ENV", value = "production" },
         { name = "DATABASE_CLIENT", value = "postgres" },
         { name = "DATABASE_HOST", value = aws_db_instance.strapi_db.address },
         { name = "DATABASE_PORT", value = "5432" },
         { name = "DATABASE_NAME", value = var.db_name },
         { name = "DATABASE_USERNAME", value = var.db_username },
         { name = "DATABASE_PASSWORD", value = var.db_password },
-        # Strapi admin JWT secret to fix "Missing admin.auth.secret configuration"
         { name = "ADMIN_JWT_SECRET", value = "changeme-super-secret-admin-jwt" },
-        # Strapi app keys for session middleware (comma-separated)
-        { name = "APP_KEYS", value = "key1,key2,key3" },
-        # Admin API / transfer / encryption secrets (change to strong, unique values)
+        { name = "JWT_SECRET", value = "your-jwt-secret-key-here-change-me" },
+        { name = "APP_KEYS", value = "key1,key2,key3,key4" },
         { name = "API_TOKEN_SALT", value = "change-me-api-salt-123" },
         { name = "TRANSFER_TOKEN_SALT", value = "change-me-transfer-salt-456" },
         { name = "ENCRYPTION_KEY", value = "change-me-encryption-key-789" },
-        # Enable Content Type Builder in production (set to false to disable)
         { name = "STRAPI_DISABLE_ADMIN", value = "false" }
       ]
     }
   ])
+
+  tags = {
+    Name        = "strapi-task-definition"
+    Environment = "production"
+    Deployment  = "blue-green"
+  }
+
+  # Lifecycle to allow CodeDeploy to manage task definition updates
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# Output task definition ARN for CodeDeploy
+output "task_definition_arn" {
+  value       = aws_ecs_task_definition.this.arn
+  description = "ARN of the ECS Task Definition"
+}
+
+output "task_definition_family" {
+  value       = aws_ecs_task_definition.this.family
+  description = "Family name of the ECS Task Definition"
 }

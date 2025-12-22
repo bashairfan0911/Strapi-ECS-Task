@@ -201,8 +201,8 @@ resource "aws_cloudwatch_dashboard" "strapi_main" {
         height = 6
         properties = {
           metrics = [
-            ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", "app/strapi-alb-irfan/73119cfcfd58d4c7", { label = "Request Count", stat = "Sum" }],
-            ["AWS/ApplicationELB", "HTTPCode_Target_2XX_Count", "LoadBalancer", "app/strapi-alb-irfan/73119cfcfd58d4c7", { label = "2XX Responses", stat = "Sum" }]
+            ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", "${aws_lb.strapi.arn_suffix}", { label = "Request Count", stat = "Sum" }],
+            ["AWS/ApplicationELB", "HTTPCode_Target_2XX_Count", "LoadBalancer", "${aws_lb.strapi.arn_suffix}", { label = "2XX Responses", stat = "Sum" }]
           ]
           period = 300
           stat   = "Sum"
@@ -301,14 +301,20 @@ resource "aws_cloudwatch_dashboard" "strapi_performance" {
         height = 6
         properties = {
           metrics = [
-            ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", "app/strapi-alb-irfan/73119cfcfd58d4c7", { stat = "Average", label = "Avg Response Time" }],
-            ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", "app/strapi-alb-irfan/73119cfcfd58d4c7", { stat = "p99", label = "P99 Response Time" }]
+            ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", "${aws_lb.strapi.arn_suffix}", "TargetGroup", "${aws_lb_target_group.blue.arn_suffix}", { stat = "Average", label = "Blue Avg Response" }],
+            ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", "${aws_lb.strapi.arn_suffix}", "TargetGroup", "${aws_lb_target_group.green.arn_suffix}", { stat = "Average", label = "Green Avg Response" }],
+            ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", "${aws_lb.strapi.arn_suffix}", { stat = "Sum", label = "Total Requests", yAxis = "right" }]
           ]
           period = 300
           region = var.aws_region
           title  = "Application Response Times"
           yAxis = {
             left = {
+              label = "Response Time (seconds)"
+              min = 0
+            }
+            right = {
+              label = "Request Count"
               min = 0
             }
           }
@@ -349,11 +355,11 @@ output "cloudwatch_dashboard_url" {
 
 output "cloudwatch_alarms" {
   value = {
-    cpu_high                = aws_cloudwatch_metric_alarm.ecs_cpu_high.alarm_name
-    memory_high             = aws_cloudwatch_metric_alarm.ecs_memory_high.alarm_name
-    task_count_low          = aws_cloudwatch_metric_alarm.ecs_running_count_low.alarm_name
-    rds_cpu_high            = aws_cloudwatch_metric_alarm.rds_cpu_high.alarm_name
-    rds_connections_high    = aws_cloudwatch_metric_alarm.rds_connections_high.alarm_name
+    cpu_high             = aws_cloudwatch_metric_alarm.ecs_cpu_high.alarm_name
+    memory_high          = aws_cloudwatch_metric_alarm.ecs_memory_high.alarm_name
+    task_count_low       = aws_cloudwatch_metric_alarm.ecs_running_count_low.alarm_name
+    rds_cpu_high         = aws_cloudwatch_metric_alarm.rds_cpu_high.alarm_name
+    rds_connections_high = aws_cloudwatch_metric_alarm.rds_connections_high.alarm_name
   }
   description = "CloudWatch Alarms created for monitoring"
 }

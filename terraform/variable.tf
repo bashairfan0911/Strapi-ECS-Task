@@ -3,7 +3,7 @@ variable "aws_region" {
 }
 
 variable "image_uri" {
-  type = string
+  type        = string
   description = "Full ECR image URI (passed from CI/CD)"
 }
 
@@ -19,7 +19,7 @@ variable "db_username" {
 }
 
 variable "db_password" {
-  type      = string
+  type = string
 }
 
 variable "log_retention_days" {

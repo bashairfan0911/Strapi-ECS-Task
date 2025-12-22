@@ -1,273 +1,326 @@
+# Strapi ECS Blue/Green Deployment
 
- **day1 Work**
-- Cloned the provided Strapi project from GitHub
-- Installed dependencies and ran Strapi locally
-- Created "Article" collection type in Strapi
-- Verified that MySQL tables were created
-- Pushed initial Strapi setup to the `irfan` branch
+A production-ready Strapi CMS application deployed on AWS ECS with Blue/Green deployment strategy using AWS CodeDeploy.
 
- **day2 – Strapi Backend**
+## Architecture Overview
 
-- Strapi API with MySQL
-- Dockerfile added
-- .dockerignore for smaller image size
-- Todos collection added
-- Works with local MySQL via host.docker.internal
-- then created docker image 
-- after created i am running this image to create container 
-- and successfully created container and run application
+This project implements a zero-downtime Blue/Green deployment architecture for a Strapi application on AWS ECS Fargate.
 
- **day3 - work**
+### Key Components
 
-- Created Docker setup with a user-defined network strapi-net.
-- Added PostgreSQL container with credentials via environment variables.
-- Built Strapi container (Dockerfile) and configured it to use Postgres via environment variables.
-- Added Nginx reverse proxy container exposing host port 80 to Strapi on port 1337.
-- Tested locally: Strapi Admin available at http://localhost/admin.
+- **ECS Cluster**: `strapi-ecs-irfan-cluster` with Container Insights enabled
+- **ECS Service**: Fargate-based service with CODE_DEPLOY deployment controller
+- **Application Load Balancer (ALB)**: Routes traffic between Blue and Green target groups
+- **CodeDeploy**: Manages automated Blue/Green deployments with canary strategy
+- **RDS PostgreSQL**: Database backend for Strapi
+- **CloudWatch**: Comprehensive monitoring and logging
 
-**day4 - work**
-1. Problem Docker Solves
-- Docker is a platform that lets you run applications inside lightweight containers. These containers include everything the app needs—settings, libraries, and dependencies—so the application runs the same on any system, without setup issues or conflicts.
+## Infrastructure Components
 
-Software used to run differently on different machines. Developers often faced issues like
-- Heavy virtual machine usage that consumed large resources
-- "It works on my machine" problems
-- Complex setup and dependency conflicts
+### 1. ECS Cluster and Service
 
-Docker solves this by:
-- Packaging applications with all dependencies
-- Making the environment consistent everywhere
-- Ensuring lightweight and fast deployments
-- Allowing isolated application containers
+- **Launch Type**: AWS Fargate (serverless)
+- **Service Name**: `strapi-service`
+- **Desired Tasks**: 2
+- **Platform Version**: 1.4.0
+- **Deployment Controller**: CODE_DEPLOY (enables Blue/Green deployments)
 
-2. Virtual Machines vs Docker
-Virtual Machines (VMs)
-- Each VM includes a full OS, applications, and binaries
-- Heavy and slow to boot
-- Uses large system resources
-- Hypervisor required
+### 2. Application Load Balancer (ALB)
 
-Docker Containers
-- Share the host OS kernel
-- Very lightweight
-- Fast startup (seconds)
-- Uses less RAM and CPU
+**Security Configuration**:
+- HTTP (Port 80): Production traffic
+- HTTPS (Port 443): Secure production traffic
+- Port 8080: Test listener for validating Green environment
 
-3. Architecture of Docker 
+**Target Groups**:
+- **Blue Target Group**: `strapi-tg-blue-irfan` - Current production
+- **Green Target Group**: `strapi-tg-green-irfan` - New deployment staging
 
-All components of docker
-1. Docker Client (CLI)
-- You interact with Docker using the CLI (docker run, docker build)
-- Sends commands to Docker Daemon through REST API
+**Health Checks**:
+- Path: `/`
+- Healthy threshold: 2 consecutive successes
+- Unhealthy threshold: 3 consecutive failures
+- Interval: 30 seconds
+- Timeout: 5 seconds
+- Success codes: 200-399
 
-2. Docker Daemon (dockerd)
-- Runs in the background
-- Manages images, containers, networks, and volumes
+### 3. ECS Task Definition
 
-3. Docker Images & Containers
-- Images = blueprints which is used to create container 
-- Containers = running instances of images
+**Task Configuration**:
+- CPU: 512 (0.5 vCPU)
+- Memory: 1024 MB
+- Container Port: 1337 (Strapi default)
+- Network Mode: awsvpc
 
-4. Docker Registry
-- Default: Docker Hub it is used to store images 
-- Stores and pulls images
+**Dynamic Updates**: Task definitions are updated outside of Terraform and deployed via CodeDeploy to enable true Blue/Green deployments.
 
-4. Everythings about dockerfile
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm install
-COPY . .
-EXPOSE 3000
-CMD ["npm", "start"]
-- FROM node:18-alpine – Selects the base image; here it's Node.js lightweight Alpine Linux
-- WORKDIR /app – Sets the working directory inside the container
-- COPY package.json ./* – Copies dependency files first for caching
-- RUN npm install – Installs project dependencies
-- COPY . . – Copies the entire codebase into the container
-- EXPOSE 3000 – Specifies the app will run on port 3000
-- CMD ["npm", "start"] – Default command that runs when container starts
+### 4. AWS CodeDeploy Configuration
 
-5. Key Docker Commands
-Images
-- docker pull image-name – Download image
-- docker images-name – List images
-- docker rmi image-name – Remove image
+**Application**: `strapi-ecs-app-irfan`
 
-Containers
-- docker run image-name – Run a new container
-- docker ps – List running containers
-- docker ps -a – All containers
-- docker stop container-id – Stop container
-- docker rm container-id – Remove container
+**Deployment Group**: `strapi-deployment-group-irfan`
 
-Build
-- docker build -t myapp . – Build image from Dockerfile
+**Deployment Strategy**: `CodeDeployDefault.ECSCanary10Percent5Minutes`
+- Initial: 10% traffic to Green environment
+- Wait: 5 minutes for validation
+- Final: 100% traffic to Green environment
 
-6. Everythings about Docker Networking
+**Automatic Rollback**: Enabled on:
+- Deployment failure
+- Deployment stop on request
 
-Command used to create custom network
-- docker network create mynetwork
+**Blue Instance Termination**: 5 minutes after successful deployment
 
-1. Bridge Network (default)
-- Containers communicate with each other using internal IPs
-- Most commonly used network in docker
-2. Host Network
-- Removes isolation
-- Container shares host network stack
-- less secure than the bridge network
-3. None
-- No network assigned
+## Prerequisites
 
-7. Volumes & Persistence
-- Containers are temporary. If a container is deleted, data inside it is lost.
-- Volumes solve this problem by storing data outside the container.
+- AWS CLI configured with appropriate credentials
+- Terraform >= 1.0
+- Docker (for local builds)
+- Node.js >= 18 (for Strapi development)
 
-Types of Storage:
-- Volumes → Managed by Docker 
-- Bind Mounts → Maps a local system directory
-Command used to create volume
-- docker volume create mydata
+## Setup Instructions
 
-8. Docker Compose
-- Docker Compose is a tool to run multi-container applications.
-Benefits:
-- One command deployment
-- Easy multi-container networking
-- Environment management
+### 1. Configure AWS Credentials
 
-Example of docker compose file
-version: "3.8"
-services:
-  postgres:
-    image: postgres:15
-    container_name: strapi-postgres
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - strapi-net
+```bash
+aws configure
+```
 
-  strapi:
-    image: irfan-strapi-app:latest
-    container_name: strapi-app
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      - DATABASE_CLIENT=postgres
-      - DATABASE_HOST=postgres
-      - DATABASE_PORT=5432
-      - DATABASE_NAME=${POSTGRES_DB}
-      - DATABASE_USERNAME=${POSTGRES_USER}
-      - DATABASE_PASSWORD=${POSTGRES_PASSWORD}
-    depends_on:
-      - postgres
-    ports:
-      - "1337:1337"
-    networks:
-      - strapi-net
+### 2. Update Terraform Variables
 
-  nginx:
-    image: nginx:stable-alpine
-    container_name: strapi-nginx
-    restart: unless-stopped
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - strapi
-    networks:
-      - strapi-net
+Edit `terraform/terraform.tfvars`:
 
-volumes:
-  postgres_data:
+```hcl
+aws_region      = "ap-south-1"
+project_name    = "strapi-ecs"
+environment     = "production"
+db_username     = "your-db-username"
+db_password     = "your-secure-password"
+```
 
-networks:
-  strapi-net:
-    external: true
+### 3. Initialize Terraform
 
+```bash
+cd terraform
+terraform init
+```
 
-  **day5 - work**
+### 4. Deploy Infrastructure
 
-  1. VPC (Virtual Private Cloud)
+```bash
+terraform plan
+terraform apply
+```
 
-- Created a new VPC with CIDR block 10.0.0.0/16.
-- This isolates our infrastructure inside a private network.
+This creates:
+- ECS Cluster with Container Insights
+- ALB with Blue/Green target groups
+- ECS Service with CODE_DEPLOY controller
+- CodeDeploy Application and Deployment Group
+- RDS PostgreSQL database
+- CloudWatch dashboards and alarms
+- Security groups and IAM roles
 
-2. Subnet
-- Created a public subnet with CIDR 10.0.1.0/24.
-- Subnet is in us-east-1a availability zone.
+## Deployment Process
 
-3. Internet Gateway (IGW)
-- IGW is attached to the VPC so that resources in the VPC can access the internet.
+### Initial Deployment
 
-4. Route Table & Association
-- A route table is created with a default route:
-- 0.0.0.0/0 → Internet Gateway
+After Terraform creates the infrastructure, deploy your first task:
 
-5. Security Group for EC2
-- Security group strapi-sg allows:
-- SSH (port 22) → To connect to EC2
-- Strapi (port 1337) → Application access
-- Outbound traffic allowed to anywhere
+```bash
+# 1. Update task definition with new Docker image
+terraform apply -target=aws_ecs_task_definition.this
 
-6. EC2 Instance
-- Uses Amazon Linux 2 AMI.
-- Instance type: t3.small 
-- Key pair added for SSH access.
-- Security group and subnet attached.
-- EC2 runs Docker via user_data script.
+# 2. Create deployment via CodeDeploy
+aws deploy create-deployment \
+  --application-name strapi-ecs-app-irfan \
+  --deployment-group-name strapi-deployment-group-irfan \
+  --revision "{\"revisionType\":\"AppSpecContent\",\"appSpecContent\":{\"content\":\"{\\\"version\\\":0.0,\\\"Resources\\\":[{\\\"TargetService\\\":{\\\"Type\\\":\\\"AWS::ECS::Service\\\",\\\"Properties\\\":{\\\"TaskDefinition\\\":\\\"arn:aws:ecs:ap-south-1:ACCOUNT_ID:task-definition/strapi-task:REVISION\\\",\\\"LoadBalancerInfo\\\":{\\\"ContainerName\\\":\\\"strapi\\\",\\\"ContainerPort\\\":1337}}}}]}\"}}"
+```
 
-User Data Script Performs:
-- Updates the server
-- Installs Docker
-- Starts and enables Docker service
-- Adds ec2-user to docker group
-- Pulls the Strapi Docker image:
-- docker pull my-image-name
-- Runs Strapi container: docker run -d --name strapi -p 1337:1337 my-image-name
-- http://ec2-public-ip:1337
+### Subsequent Deployments
 
+1. **Update Application Code**
+   ```bash
+   # Build and push new Docker image
+   docker build -t strapi:latest .
+   docker tag strapi:latest ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/strapi:latest
+   docker push ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/strapi:latest
+   ```
 
-terraform folder
-main.tf
-- VPC
-- Subnet
-- Internet Gateway
-- Route Table & Association
-- Security Group
-- EC2 instance
-- variables.tf
+2. **Update Task Definition**
+   ```bash
+   terraform apply -target=aws_ecs_task_definition.this
+   ```
 
-Stores input variables:
-- aws_region
-- instance_type
-- key_name
-- docker_image
-- terraform.tfvars
+3. **Trigger Blue/Green Deployment**
+   - CodeDeploy automatically deploys to Green target group
+   - New tasks start and undergo health checks
+   - Test listener (port 8080) allows validation
+   - Traffic shifts: 10% → wait 5 min → 100%
+   - Old Blue tasks terminate after 5 minutes
 
-user_data.sh
-- Bootstraps EC2 with Docker and Strapi.
+### Traffic Flow During Deployment
 
-.gitignore
-- Ensures sensitive files like .tfstate, .tfvars, and .terraform/ are not pushed to GitHub.
+**Before Deployment:**
+```
+Port 80 → Blue Target Group → Old Tasks (v1)
+Port 8080 → Green Target Group → (empty)
+```
 
-Run these command
-- terraform init
-- terraform plan
-- terraform apply
+**During Deployment:**
+```
+Port 80 → Blue (90%) + Green (10%) → Mixed traffic
+Port 8080 → Green Target Group → New Tasks (v2) [Testing]
+```
 
-Then done ssh into ec2 
-- ssh -i my-key.pem ec2-user@<public-ip>  go to ec2 and check every things running
-- terraform destroy  - destroye every infrastructure
+**After Deployment:**
+```
+Port 80 → Green Target Group → New Tasks (v2)
+Port 8080 → Blue Target Group → (ready for next deployment)
+```
 
+## Monitoring
 
+### CloudWatch Dashboards
 
+1. **strapi-application-monitoring**
+   - ECS CPU and Memory utilization
+   - RDS database metrics
+   - ALB traffic and response codes
+   - Task deployment status
 
+2. **strapi-performance-monitoring**
+   - CPU/Memory trends (Peak, Min, Avg)
+   - Application response times (Blue/Green)
+   - RDS network throughput
+   - Request count
 
+### CloudWatch Alarms
+
+- `strapi-ecs-cpu-utilization-high` - CPU > 80%
+- `strapi-ecs-memory-utilization-high` - Memory > 85%
+- `strapi-ecs-running-task-count-low` - Running tasks < 1
+- `strapi-rds-cpu-utilization-high` - RDS CPU > 75%
+- `strapi-rds-database-connections-high` - Connections > 80
+
+### Access Logs
+
+```bash
+# ECS Container Logs
+aws logs tail /ecs/strapi --follow
+
+# Get specific task logs
+aws logs get-log-events \
+  --log-group-name /ecs/strapi \
+  --log-stream-name ecs/strapi/CONTAINER_ID
+```
+
+## Access URLs
+
+- **Production**: http://strapi-alb-irfan-1870158425.ap-south-1.elb.amazonaws.com
+- **Test/Validation**: http://strapi-alb-irfan-1870158425.ap-south-1.elb.amazonaws.com:8080
+- **CloudWatch Dashboard**: https://console.aws.amazon.com/cloudwatch/home?region=ap-south-1#dashboards:name=strapi-application-monitoring
+
+## Security Groups
+
+### ALB Security Group
+- **Inbound**: Ports 80, 443, 8080 from 0.0.0.0/0
+- **Outbound**: All traffic
+
+### ECS Security Group
+- **Inbound**: Port 1337 from ALB security group only
+- **Outbound**: All traffic
+
+### RDS Security Group
+- **Inbound**: Port 5432 from ECS security group only
+- **Outbound**: None
+
+## Environment Variables
+
+Key environment variables configured in the ECS task definition:
+
+- `NODE_ENV=production`
+- `DATABASE_CLIENT=postgres`
+- `DATABASE_HOST` - RDS endpoint
+- `DATABASE_PORT=5432`
+- `DATABASE_NAME=strapidb`
+- `JWT_SECRET` - Authentication secret
+- `ADMIN_JWT_SECRET` - Admin panel authentication
+- `APP_KEYS` - Application encryption keys
+
+## Troubleshooting
+
+### 502 Bad Gateway
+
+Check ECS task logs for application errors:
+```bash
+aws ecs describe-services \
+  --cluster strapi-ecs-irfan-cluster \
+  --services strapi-service
+
+aws logs tail /ecs/strapi --follow
+```
+
+### Deployment Failed
+
+1. Check CodeDeploy deployment status:
+   ```bash
+   aws deploy get-deployment --deployment-id DEPLOYMENT_ID
+   ```
+
+2. Review CloudWatch alarms for threshold breaches
+
+3. Validate task definition configuration
+
+### No Healthy Targets
+
+1. Check target group health:
+   ```bash
+   aws elbv2 describe-target-health \
+     --target-group-arn TARGET_GROUP_ARN
+   ```
+
+2. Verify security group rules allow ALB → ECS traffic
+
+3. Confirm application is listening on port 1337
+
+## Infrastructure Outputs
+
+After deployment, Terraform provides:
+
+- `alb_dns_name` - Load balancer endpoint
+- `ecs_cluster_name` - ECS cluster name
+- `ecs_service_name` - ECS service name
+- `codedeploy_app_name` - CodeDeploy application
+- `rds_endpoint` - Database endpoint
+- `cloudwatch_dashboard_url` - Monitoring dashboard
+
+## Cost Optimization
+
+- **Fargate Tasks**: Pay only for vCPU and memory used
+- **RDS**: Consider Reserved Instances for production
+- **ALB**: Single ALB for both Blue/Green deployments
+- **CloudWatch Logs**: 7-day retention configured
+
+## Cleanup
+
+To destroy all resources:
+
+```bash
+cd terraform
+terraform destroy
+```
+
+**Warning**: This will permanently delete all data including the RDS database.
+
+## License
+
+MIT
+
+## Support
+
+For issues or questions, refer to:
+- [AWS ECS Documentation](https://docs.aws.amazon.com/ecs/)
+- [AWS CodeDeploy Documentation](https://docs.aws.amazon.com/codedeploy/)
+- [Strapi Documentation](https://docs.strapi.io/)
