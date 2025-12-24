@@ -119,11 +119,14 @@ jobs:
           }
           EOF
           
+          # Escape the AppSpec JSON content
+          APPSPEC_CONTENT=$(cat appspec.json | jq -c . | sed 's/"/\\"/g')
+          
           # Trigger deployment
           DEPLOYMENT_ID=$(aws deploy create-deployment \
             --application-name ${{ env.CODEDEPLOY_APPLICATION }} \
             --deployment-group-name ${{ env.CODEDEPLOY_DEPLOYMENT_GROUP }} \
-            --revision revisionType=AppSpecContent,appSpecContent={content="$(cat appspec.json | jq -c .)"} \
+            --revision "{\"revisionType\":\"AppSpecContent\",\"appSpecContent\":{\"content\":\"$APPSPEC_CONTENT\"}}" \
             --description "Manual deployment - Image: ${{ steps.image.outputs.image }}" \
             --query 'deploymentId' \
             --output text)
