@@ -1,6 +1,6 @@
 resource "aws_db_subnet_group" "default" {
   name       = "strapi-db-subnet-group-irfan-ap"
-  subnet_ids = data.aws_subnets.default_vpc_subnets.ids
+  subnet_ids = local.all_subnets
 
   tags = {
     Name = "strapi-db-subnet-group-irfan"

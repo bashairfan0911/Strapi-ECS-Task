@@ -21,7 +21,7 @@ resource "aws_ecs_service" "strapi" {
 
   # Network configuration for Fargate
   network_configuration {
-    subnets          = data.aws_subnets.default_vpc_subnets.ids
+    subnets          = local.all_subnets
     security_groups  = [aws_security_group.ecs_sg.id]
     assign_public_ip = true
   }
