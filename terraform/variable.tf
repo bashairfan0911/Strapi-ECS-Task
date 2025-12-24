@@ -4,7 +4,8 @@ variable "aws_region" {
 
 variable "image_uri" {
   type        = string
-  description = "Full ECR image URI (passed from CI/CD)"
+  description = "Full ECR image URI (passed from CI/CD). If empty, uses ECR repository with 'latest' tag"
+  default     = ""
 }
 
 # DB variables

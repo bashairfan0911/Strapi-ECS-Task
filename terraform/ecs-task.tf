@@ -4,6 +4,12 @@
 # This task definition serves as a placeholder and will be updated dynamically
 # by CodeDeploy during Blue/Green deployments via CI/CD pipeline
 
+# Local to determine image URI
+locals {
+  # Use provided image_uri or default to ECR repository with latest tag
+  container_image = var.image_uri != "" ? var.image_uri : "${aws_ecr_repository.strapi.repository_url}:latest"
+}
+
 resource "aws_ecs_task_definition" "this" {
   family                   = "strapi-task"
   requires_compatibilities = ["FARGATE"]
@@ -17,7 +23,7 @@ resource "aws_ecs_task_definition" "this" {
   container_definitions = jsonencode([
     {
       name      = "strapi"
-      image     = var.image_uri
+      image     = local.container_image
       essential = true
 
       portMappings = [
@@ -31,9 +37,10 @@ resource "aws_ecs_task_definition" "this" {
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          awslogs-group         = aws_cloudwatch_log_group.strapi_ecs.name
+          awslogs-group         = "/ecs/strapi"
           awslogs-region        = var.aws_region
           awslogs-stream-prefix = "ecs/strapi"
+          awslogs-create-group  = "true"
         }
       }
 
@@ -51,7 +58,9 @@ resource "aws_ecs_task_definition" "this" {
         { name = "API_TOKEN_SALT", value = "change-me-api-salt-123" },
         { name = "TRANSFER_TOKEN_SALT", value = "change-me-transfer-salt-456" },
         { name = "ENCRYPTION_KEY", value = "change-me-encryption-key-789" },
-        { name = "STRAPI_DISABLE_ADMIN", value = "false" }
+        { name = "STRAPI_DISABLE_ADMIN", value = "false" },
+        { name = "STRAPI_DISABLE_UPDATE_NOTIFICATION", value = "true" },
+        { name = "STRAPI_TELEMETRY_DISABLED", value = "true" }
       ]
     }
   ])

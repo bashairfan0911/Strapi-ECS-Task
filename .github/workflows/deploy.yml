@@ -1,0 +1,286 @@
+name: Deploy Strapi to ECS with Blue/Green
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - Task-11
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: strapi-app
+  ECS_CLUSTER: strapi-ecs-irfan-cluster
+  ECS_SERVICE: strapi-service
+  TASK_DEFINITION_FAMILY: strapi-task
+  CONTAINER_NAME: strapi
+  CODEDEPLOY_APPLICATION: strapi-ecs-app-irfan
+  CODEDEPLOY_DEPLOYMENT_GROUP: strapi-deployment-group-irfan
+
+jobs:
+  build-and-push:
+    name: Build and Push to ECR
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.build-image.outputs.image }}
+      image_tag: ${{ steps.build-image.outputs.image_tag }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Build the Docker image
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          
+          # Also tag as latest
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          
+          # Push both tags
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          
+          # Output the image URI
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          
+          echo "✅ Image pushed: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+  deploy:
+    name: Deploy to ECS via CodeDeploy
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get current task definition
+        id: get-task-def
+        run: |
+          # Fetch the current task definition
+          aws ecs describe-task-definition \
+            --task-definition ${{ env.TASK_DEFINITION_FAMILY }} \
+            --query 'taskDefinition' \
+            --output json > current-task-def.json
+          
+          # Remove fields that shouldn't be in a new registration
+          jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
+            current-task-def.json > task-definition.json
+          
+          echo "📋 Current task definition retrieved"
+
+      - name: Update task definition with new image
+        id: update-task-def
+        env:
+          NEW_IMAGE: ${{ needs.build-and-push.outputs.image }}
+        run: |
+          # Update the image in the container definition
+          jq --arg IMAGE "$NEW_IMAGE" \
+            '.containerDefinitions[0].image = $IMAGE' \
+            task-definition.json > updated-task-definition.json
+          
+          # Verify the update
+          echo "📦 New image: $NEW_IMAGE"
+          cat updated-task-definition.json | jq '.containerDefinitions[0].image'
+
+      - name: Register new task definition
+        id: register-task-def
+        run: |
+          # Register the new task definition
+          NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --cli-input-json file://updated-task-definition.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          
+          echo "task_def_arn=$NEW_TASK_DEF_ARN" >> $GITHUB_OUTPUT
+          echo "✅ New task definition registered: $NEW_TASK_DEF_ARN"
+
+      - name: Create AppSpec for CodeDeploy
+        id: create-appspec
+        env:
+          TASK_DEF_ARN: ${{ steps.register-task-def.outputs.task_def_arn }}
+        run: |
+          # Create AppSpec file for CodeDeploy Blue/Green deployment
+          cat > appspec.json << EOF
+          {
+            "version": 0.0,
+            "Resources": [
+              {
+                "TargetService": {
+                  "Type": "AWS::ECS::Service",
+                  "Properties": {
+                    "TaskDefinition": "$TASK_DEF_ARN",
+                    "LoadBalancerInfo": {
+                      "ContainerName": "${{ env.CONTAINER_NAME }}",
+                      "ContainerPort": 1337
+                    },
+                    "PlatformVersion": "1.4.0"
+                  }
+                }
+              }
+            ]
+          }
+          EOF
+          
+          echo "📄 AppSpec created:"
+          cat appspec.json
+
+      - name: Trigger CodeDeploy deployment
+        id: deploy
+        run: |
+          # Create the deployment
+          DEPLOYMENT_ID=$(aws deploy create-deployment \
+            --application-name ${{ env.CODEDEPLOY_APPLICATION }} \
+            --deployment-group-name ${{ env.CODEDEPLOY_DEPLOYMENT_GROUP }} \
+            --revision revisionType=AppSpecContent,appSpecContent={content="$(cat appspec.json | jq -c .)"} \
+            --description "Deployment from GitHub Actions - Commit: ${{ github.sha }}" \
+            --query 'deploymentId' \
+            --output text)
+          
+          echo "deployment_id=$DEPLOYMENT_ID" >> $GITHUB_OUTPUT
+          echo "🚀 Deployment triggered: $DEPLOYMENT_ID"
+
+      - name: Monitor deployment status
+        id: monitor
+        env:
+          DEPLOYMENT_ID: ${{ steps.deploy.outputs.deployment_id }}
+        run: |
+          echo "⏳ Monitoring deployment: $DEPLOYMENT_ID"
+          
+          MAX_ATTEMPTS=60
+          ATTEMPT=0
+          
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            STATUS=$(aws deploy get-deployment \
+              --deployment-id $DEPLOYMENT_ID \
+              --query 'deploymentInfo.status' \
+              --output text)
+            
+            echo "Attempt $((ATTEMPT+1))/$MAX_ATTEMPTS - Status: $STATUS"
+            
+            case $STATUS in
+              "Succeeded")
+                echo "✅ Deployment succeeded!"
+                echo "status=success" >> $GITHUB_OUTPUT
+                exit 0
+                ;;
+              "Failed"|"Stopped")
+                echo "❌ Deployment failed with status: $STATUS"
+                
+                # Get deployment info for debugging
+                aws deploy get-deployment \
+                  --deployment-id $DEPLOYMENT_ID \
+                  --query 'deploymentInfo.errorInformation' \
+                  --output json
+                
+                echo "status=failed" >> $GITHUB_OUTPUT
+                exit 1
+                ;;
+              "Ready")
+                echo "🟡 Deployment ready - waiting for traffic shift..."
+                ;;
+              "InProgress"|"Created"|"Queued"|"Baking")
+                echo "🔄 Deployment in progress..."
+                ;;
+              *)
+                echo "🟠 Unknown status: $STATUS"
+                ;;
+            esac
+            
+            ATTEMPT=$((ATTEMPT+1))
+            sleep 30
+          done
+          
+          echo "⚠️ Deployment monitoring timed out"
+          echo "status=timeout" >> $GITHUB_OUTPUT
+          exit 1
+
+      - name: Rollback on failure (if needed)
+        if: failure() && steps.deploy.outputs.deployment_id != ''
+        env:
+          DEPLOYMENT_ID: ${{ steps.deploy.outputs.deployment_id }}
+        run: |
+          echo "🔙 Attempting to stop and rollback deployment..."
+          
+          # Stop the deployment
+          aws deploy stop-deployment \
+            --deployment-id $DEPLOYMENT_ID \
+            --auto-rollback-enabled || true
+          
+          echo "⚠️ Deployment stopped. Auto-rollback initiated if configured."
+
+      - name: Post deployment summary
+        if: always()
+        env:
+          DEPLOYMENT_ID: ${{ steps.deploy.outputs.deployment_id }}
+          IMAGE: ${{ needs.build-and-push.outputs.image }}
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit SHA** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | \`$IMAGE\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Deployment ID** | \`$DEPLOYMENT_ID\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Cluster** | \`${{ env.ECS_CLUSTER }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Service** | \`${{ env.ECS_SERVICE }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### AWS Console Links" >> $GITHUB_STEP_SUMMARY
+          echo "- [ECS Cluster](https://console.aws.amazon.com/ecs/home?region=${{ env.AWS_REGION }}#/clusters/${{ env.ECS_CLUSTER }})" >> $GITHUB_STEP_SUMMARY
+          echo "- [CodeDeploy Deployment](https://console.aws.amazon.com/codesuite/codedeploy/deployments/$DEPLOYMENT_ID?region=${{ env.AWS_REGION }})" >> $GITHUB_STEP_SUMMARY
+
+  notify:
+    name: Notify on completion
+    needs: [build-and-push, deploy]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Notify success
+        if: needs.deploy.result == 'success'
+        run: |
+          echo "🎉 Deployment completed successfully!"
+          echo "Image: ${{ needs.build-and-push.outputs.image }}"
+          # Add Slack/Teams notification here if needed
+
+      - name: Notify failure
+        if: needs.deploy.result == 'failure'
+        run: |
+          echo "❌ Deployment failed!"
+          echo "Check the deployment logs for details."
+          # Add Slack/Teams notification here if needed
+          exit 1

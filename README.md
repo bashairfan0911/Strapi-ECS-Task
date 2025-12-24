@@ -222,6 +222,156 @@ aws logs get-log-events \
 - **Test/Validation**: http://strapi-alb-irfan-1870158425.ap-south-1.elb.amazonaws.com:8080
 - **CloudWatch Dashboard**: https://console.aws.amazon.com/cloudwatch/home?region=ap-south-1#dashboards:name=strapi-application-monitoring
 
+## CI/CD with GitHub Actions
+
+This project includes automated CI/CD pipelines using GitHub Actions for Blue/Green deployments.
+
+### Workflows
+
+#### 1. Deploy Workflow (`.github/workflows/deploy.yml`)
+
+Automatically triggered on push to `main` or `master` branches:
+
+1. **Build & Push**: Builds Docker image and pushes to ECR with commit SHA tag
+2. **Deploy**: Updates ECS task definition and triggers CodeDeploy
+3. **Monitor**: Watches deployment status and initiates rollback on failure
+4. **Notify**: Sends deployment summary
+
+#### 2. Manual Deployment (`.github/workflows/manual-deploy.yml`)
+
+Triggered manually for:
+- **Deploy**: Deploy a specific image tag
+- **Rollback**: Stop and rollback a deployment
+- **Status**: Check deployment or ECS service status
+
+### Setup GitHub Actions
+
+#### 1. Configure GitHub Secrets
+
+Go to your repository → Settings → Secrets and variables → Actions, and add:
+
+| Secret Name | Description |
+|-------------|-------------|
+| `AWS_ACCESS_KEY_ID` | AWS IAM user access key |
+| `AWS_SECRET_ACCESS_KEY` | AWS IAM user secret key |
+
+#### 2. IAM Permissions Required
+
+Create an IAM user/role with these permissions:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:GetAuthorizationToken",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "ecr:PutImage",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeTaskDefinition",
+        "ecs:RegisterTaskDefinition",
+        "ecs:DescribeServices"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "codedeploy:CreateDeployment",
+        "codedeploy:GetDeployment",
+        "codedeploy:StopDeployment",
+        "codedeploy:ListDeployments"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "*",
+      "Condition": {
+        "StringEqualsIfExists": {
+          "iam:PassedToService": [
+            "ecs-tasks.amazonaws.com"
+          ]
+        }
+      }
+    }
+  ]
+}
+```
+
+#### 3. Trigger Automatic Deployment
+
+Push to main branch:
+
+```bash
+git add .
+git commit -m "feat: new feature"
+git push origin main
+```
+
+The workflow will:
+1. Build Docker image tagged with commit SHA
+2. Push to ECR (e.g., `123456789.dkr.ecr.ap-south-1.amazonaws.com/strapi-app:abc123def`)
+3. Register new ECS task definition
+4. Create CodeDeploy deployment
+5. Monitor until completion (with 30-minute timeout)
+6. Auto-rollback on failure
+
+#### 4. Manual Operations
+
+**Deploy specific image:**
+1. Go to Actions → Manual Deployment & Rollback
+2. Select "Run workflow"
+3. Choose `deploy` action
+4. Optionally specify image tag (default: `latest`)
+
+**Rollback deployment:**
+1. Go to Actions → Manual Deployment & Rollback
+2. Select "Run workflow"
+3. Choose `rollback` action
+4. Enter the deployment ID to rollback
+
+**Check status:**
+1. Go to Actions → Manual Deployment & Rollback
+2. Select "Run workflow"
+3. Choose `status` action
+4. Optionally enter deployment ID (or leave empty for recent deployments)
+
+### Deployment Flow
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  Git Push   │────▶│ Build Image │────▶│  Push ECR   │
+└─────────────┘     └─────────────┘     └─────────────┘
+                                              │
+                    ┌─────────────────────────┘
+                    ▼
+            ┌───────────────┐     ┌───────────────┐
+            │ Register Task │────▶│  CodeDeploy   │
+            │  Definition   │     │  Deployment   │
+            └───────────────┘     └───────────────┘
+                                          │
+                    ┌─────────────────────┘
+                    ▼
+            ┌───────────────┐     ┌───────────────┐
+            │    Monitor    │────▶│   Complete/   │
+            │    Status     │     │   Rollback    │
+            └───────────────┘     └───────────────┘
+```
+
 ## Security Groups
 
 ### ALB Security Group
